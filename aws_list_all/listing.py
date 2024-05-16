@@ -3,6 +3,7 @@ import pprint
 import boto3
 
 from .client import get_client
+from .pagination import has_pagination, extract_pagination_token, extract_pagination_parameters, merge_responses
 
 
 def get_parameters():
@@ -69,7 +70,23 @@ def get_parameters():
     return parameters
 
 
-def run_raw_listing_operation(service, region, operation, profile):
+def paginate_response(service, region, operation, profile, response):
+    pagination_token = extract_pagination_token(service, operation, response)
+    pagination_parameters = extract_pagination_parameters(service, operation, response)
+    while pagination_token:
+        new_response = run_raw_listing_operation(service, region, operation, profile, pagination_parameters)
+        response = merge_responses(
+            service,
+            operation,
+            response,
+            new_response
+        )
+        pagination_token = extract_pagination_token(service, operation, new_response)
+        pagination_parameters = extract_pagination_parameters(service, operation, new_response)
+
+    return response
+
+def run_raw_listing_operation(service, region, operation, profile, additional_parameters=None):
     """Execute a given operation and return its raw result"""
     client = get_client(service, region, profile)
     api_to_method_mapping = dict((v, k) for k, v in client.meta.method_to_api_mapping.items())
@@ -79,6 +96,8 @@ def run_raw_listing_operation(service, region, operation, profile):
     if "MaxResults" in required_members:
         # Current limit for cognito identity pools is 60
         parameters["MaxResults"] = 10
+    if additional_parameters != None:
+        parameters.update(additional_parameters)
     return getattr(client, api_to_method_mapping[operation])(**parameters)
 
 
@@ -138,6 +157,9 @@ class Listing(object):
         response = run_raw_listing_operation(service, region, operation, profile)
         if response['ResponseMetadata']['HTTPStatusCode'] != 200:
             raise Exception('Bad AWS HTTP Status Code', response)
+        
+        if has_pagination(service, operation, response):
+            response = paginate_response(service, region, operation, profile, response)
         return cls(service, region, operation, response, profile)
 
     @property
